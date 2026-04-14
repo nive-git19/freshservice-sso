@@ -131,7 +131,7 @@
   </main>
   <footer>&copy; 2025 Amazon Support Portal · Powered by Freshservice · Internal Use Only</footer>
   <script>
-    // Capture OIDC params from URL (sent by Freshservice during redirect)
+    // Capture OIDC params from URL (Freshservice sends these during the bounce)
     const urlParams = new URLSearchParams(window.location.search);
     document.getElementById('oidcState').value = urlParams.get('state') || '';
     document.getElementById('oidcNonce').value = urlParams.get('nonce') || '';
