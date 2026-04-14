@@ -15,6 +15,9 @@ const CONFIG = {
   // The OIDC Redirect URL from Freshservice SSO config
   redirect_uri: 'https://nive-959766391470843394.myfreshworks.com/sp/OIDC/964246980516603282/implicit',
 
+  // Freshservice login URL — triggers SSO redirect back to our Authorization URL
+  freshservice_sso_trigger: 'https://nive-959766391470843394.myfreshworks.com',
+
   agents: {
     'niveditha@oskloud.com': {
       password: 'Nivedemo@1234',
@@ -51,9 +54,34 @@ try {
 // ═══════════════════════════════════════════════════
 // ROUTES — Serve login pages
 // ═══════════════════════════════════════════════════
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'amazon.html')));
-app.get('/amazon', (req, res) => res.sendFile(path.join(__dirname, 'public', 'amazon.html')));
-app.get('/netflix', (req, res) => res.sendFile(path.join(__dirname, 'public', 'netflix.html')));
+
+// When Freshservice redirects here, URL has ?client_id=&state=&nonce=
+// When agent visits directly, URL has no OIDC params → redirect to Freshservice first
+app.get('/amazon', (req, res) => {
+  if (req.query.state && req.query.nonce) {
+    // OIDC params present → serve the login page
+    res.sendFile(path.join(__dirname, 'public', 'amazon.html'));
+  } else {
+    // No OIDC params → agent came directly
+    // Redirect to Freshservice, which will bounce them back here WITH params
+    console.log('📌 Direct access to /amazon — redirecting to Freshservice to get OIDC params');
+    res.redirect(CONFIG.freshservice_sso_trigger);
+  }
+});
+
+app.get('/netflix', (req, res) => {
+  if (req.query.state && req.query.nonce) {
+    res.sendFile(path.join(__dirname, 'public', 'netflix.html'));
+  } else {
+    console.log('📌 Direct access to /netflix — redirecting to Freshservice to get OIDC params');
+    res.redirect(CONFIG.freshservice_sso_trigger);
+  }
+});
+
+app.get('/', (req, res) => {
+  // Default landing — redirect to Freshservice to start SSO flow
+  res.redirect(CONFIG.freshservice_sso_trigger);
+});
 
 // ═══════════════════════════════════════════════════
 // LOGIN — Authenticate and redirect via OIDC implicit flow
@@ -68,7 +96,10 @@ app.post('/login', (req, res) => {
   }
 
   if (!state || !nonce) {
-    console.warn('⚠️  Missing state or nonce — SSO flow may have been started directly, not from Freshservice');
+    return res.status(400).json({
+      success: false,
+      error: 'SSO session expired. Please refresh the page and try again.'
+    });
   }
 
   const agentKey = email.toLowerCase().trim();
@@ -97,7 +128,7 @@ app.post('/login', (req, res) => {
     given_name: agent.given_name,     // Required — first name
     family_name: agent.family_name,   // Required — last name
     iat: now,                         // Required — issued at (unix timestamp)
-    nonce: nonce || ''                // Required — MUST be the nonce Freshservice sent
+    nonce: nonce                      // Required — MUST be the nonce Freshservice sent
   };
 
   let token;
@@ -110,8 +141,7 @@ app.post('/login', (req, res) => {
   }
 
   // ─── Redirect to Freshworks OIDC implicit endpoint ───
-  // Format: {redirect_uri}?state={state}&id_token={jwt}
-  const redirectUrl = `${CONFIG.redirect_uri}?state=${encodeURIComponent(state || '')}&id_token=${token}`;
+  const redirectUrl = `${CONFIG.redirect_uri}?state=${encodeURIComponent(state)}&id_token=${token}`;
 
   console.log(`✅ Login: ${agentKey} → redirecting to OIDC endpoint`);
 
@@ -130,5 +160,8 @@ app.listen(PORT, () => {
 🟠 Amazon → http://localhost:${PORT}/amazon
 🔴 Netflix → http://localhost:${PORT}/netflix
 📌 OIDC Redirect URI: ${CONFIG.redirect_uri}
+
+💡 Direct access to /amazon or /netflix will auto-redirect through
+   Freshservice to obtain OIDC params, then show the login page.
   `);
 });
