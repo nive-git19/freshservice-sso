@@ -102,7 +102,6 @@
         </div>
         <form id="loginForm">
           <input type="hidden" name="portal" value="amazon"/>
-          <!-- OIDC params captured from Freshservice redirect -->
           <input type="hidden" name="state" id="oidcState"/>
           <input type="hidden" name="nonce" id="oidcNonce"/>
           <div class="field">
@@ -132,21 +131,10 @@
   </main>
   <footer>&copy; 2025 Amazon Support Portal · Powered by Freshservice · Internal Use Only</footer>
   <script>
-    // ═══════════════════════════════════════════════════════
-    // Capture OIDC params from Freshservice redirect URL
-    // Freshservice redirects here as:
-    //   /amazon?client_id=xxx&state=xxx&nonce=xxx&grant_type=implicit&scope=...
-    // ═══════════════════════════════════════════════════════
+    // Capture OIDC params from URL (sent by Freshservice during redirect)
     const urlParams = new URLSearchParams(window.location.search);
     document.getElementById('oidcState').value = urlParams.get('state') || '';
     document.getElementById('oidcNonce').value = urlParams.get('nonce') || '';
-
-    // Debug log (remove in production)
-    console.log('OIDC params:', {
-      state: urlParams.get('state'),
-      nonce: urlParams.get('nonce'),
-      client_id: urlParams.get('client_id')
-    });
 
     function togglePw() {
       const pw = document.getElementById('password');
