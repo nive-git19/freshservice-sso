@@ -86,3 +86,16 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`✅ SSO Portal running on port ${PORT}`));
+const PORTAL_AGENTS = {
+  amazon: ['niveditha@oskloud.com'],
+  netflix: ['nivetestfw@gmail.com']
+};
+
+app.post('/login', (req, res) => {
+  const { email, portal } = req.body;
+  const allowed = (PORTAL_AGENTS[portal] || []).map(e => e.toLowerCase());
+  if (!allowed.includes(email.toLowerCase())) {
+    return res.json({ success: false, error: 'You are not authorized for this portal.' });
+  }
+  // rest of your JWT code...
+});
