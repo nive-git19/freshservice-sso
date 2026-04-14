@@ -10,14 +10,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const CONFIG = {
-  freshservice_url: 'https://nive-959766391470843394.myfreshworks.com',
+  oidc_url: 'https://nive-959766391470843394.myfreshworks.com/sp/OIDC/963808191442391342/implicit',
   agents: {
     'niveditha@oskloud.com': { password: 'Nivedemo@1234', workspace: 'amazon' },
     'nivetestfw@gmail.com':  { password: 'Nivedemo@1234', workspace: 'netflix' }
   }
 };
 
-// Load RSA private key
 let PRIVATE_KEY;
 try {
   if (process.env.PRIVATE_KEY) {
@@ -37,7 +36,7 @@ app.get('/amazon', (req, res) => res.sendFile(path.join(__dirname, 'public', 'am
 app.get('/netflix', (req, res) => res.sendFile(path.join(__dirname, 'public', 'netflix.html')));
 
 app.post('/login', (req, res) => {
-  const { email, password, portal } = req.body;
+  const { email, password, portal, state, nonce } = req.body;
 
   if (!email || !password)
     return res.status(400).json({ success: false, error: 'Email and password are required.' });
@@ -58,12 +57,16 @@ app.post('/login', (req, res) => {
     });
 
   const now = Math.floor(Date.now() / 1000);
+  const tokenNonce = nonce || uuidv4();
+  const tokenState = state || uuidv4();
+
   const payload = {
     sub: agentKey,
     email: agentKey,
     iat: now,
     exp: now + 300,
-    jti: uuidv4()
+    jti: uuidv4(),
+    nonce: tokenNonce
   };
 
   let token;
@@ -71,10 +74,11 @@ app.post('/login', (req, res) => {
     token = jwt.sign(payload, PRIVATE_KEY, { algorithm: 'RS256' });
   } catch (err) {
     console.error('JWT signing error:', err.message);
-    return res.status(500).json({ success: false, error: 'Authentication error. Please contact admin.' });
+    return res.status(500).json({ success: false, error: 'Authentication error.' });
   }
 
-  const redirectUrl = `${CONFIG.freshservice_url}/login/jwt?jwt=${token}`;
+  // ✅ Correct OIDC implicit flow — id_token + state
+  const redirectUrl = `${CONFIG.oidc_url}?id_token=${token}&state=${tokenState}`;
   console.log(`✅ Login success: ${agentKey} → ${portal} portal`);
   return res.json({ success: true, redirectUrl });
 });
