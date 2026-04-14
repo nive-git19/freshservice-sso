@@ -1,5 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 
@@ -8,111 +9,62 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ═══════════════════════════════════════════════════
-// CONFIG
-// ═══════════════════════════════════════════════════
+// ─────────────────────────────────────────
+// CONFIG — All settings in one place
+// ─────────────────────────────────────────
 const CONFIG = {
-  // The OIDC Redirect URL from Freshservice SSO config
-  redirect_uri: 'https://nive-959766391470843394.myfreshworks.com/sp/OIDC/964246980516603282/implicit',
+  freshservice_url: 'https://nive-959766391470843394.myfreshworks.com',
 
-  // Freshservice login URL — triggers SSO redirect back to our Authorization URL
-  freshservice_sso_trigger: 'https://nive-959766391470843394.myfreshworks.com',
-
+  // Agents: email → { password, workspace, given_name, family_name }
   agents: {
-    'niveditha@oskloud.com': {
-      password: 'Nivedemo@1234',
-      workspace: 'amazon',
-      given_name: 'Niveditha',
-      family_name: 'Agent'
-    },
-    'nivetestfw@gmail.com': {
-      password: 'Nivedemo@1234',
-      workspace: 'netflix',
-      given_name: 'Nive',
-      family_name: 'Test'
-    }
+    'niveditha@oskloud.com': { password: 'Nivedemo@1234', workspace: 'amazon', given_name: 'Niveditha', family_name: 'Agent' },
+    'nivetestfw@gmail.com':  { password: 'Nivedemo@1234', workspace: 'netflix', given_name: 'Nive', family_name: 'Test' }
   }
 };
 
-// ═══════════════════════════════════════════════════
-// LOAD PRIVATE KEY
-// ═══════════════════════════════════════════════════
+// Load RSA private key
 let PRIVATE_KEY;
 try {
-  if (process.env.PRIVATE_KEY) {
-    PRIVATE_KEY = process.env.PRIVATE_KEY.replace(/\\n/g, '\n');
-    console.log('✅ Private key loaded from ENV');
-  } else {
-    PRIVATE_KEY = fs.readFileSync(path.join(__dirname, 'private.key'), 'utf8');
-    console.log('✅ Private key loaded from file');
-  }
+  PRIVATE_KEY = process.env.PRIVATE_KEY
+    ? process.env.PRIVATE_KEY.replace(/\\n/g, '\n')
+    : fs.readFileSync(path.join(__dirname, 'private.key'), 'utf8');
+  console.log('✅ Private key loaded successfully');
 } catch (err) {
   console.error('❌ Private key not found!');
   process.exit(1);
 }
 
-// ═══════════════════════════════════════════════════
-// ROUTES — Serve login pages
-// ═══════════════════════════════════════════════════
+// ─────────────────────────────────────────
+// ROUTES
+// ─────────────────────────────────────────
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'amazon.html')));
+app.get('/amazon', (req, res) => res.sendFile(path.join(__dirname, 'public', 'amazon.html')));
+app.get('/netflix', (req, res) => res.sendFile(path.join(__dirname, 'public', 'netflix.html')));
 
-// When Freshservice redirects here, URL has ?client_id=&state=&nonce=
-// When agent visits directly, URL has no OIDC params → redirect to Freshservice first
-app.get('/amazon', (req, res) => {
-  if (req.query.state && req.query.nonce) {
-    // OIDC params present → serve the login page
-    res.sendFile(path.join(__dirname, 'public', 'amazon.html'));
-  } else {
-    // No OIDC params → agent came directly
-    // Redirect to Freshservice, which will bounce them back here WITH params
-    console.log('📌 Direct access to /amazon — redirecting to Freshservice to get OIDC params');
-    res.redirect(CONFIG.freshservice_sso_trigger);
-  }
-});
-
-app.get('/netflix', (req, res) => {
-  if (req.query.state && req.query.nonce) {
-    res.sendFile(path.join(__dirname, 'public', 'netflix.html'));
-  } else {
-    console.log('📌 Direct access to /netflix — redirecting to Freshservice to get OIDC params');
-    res.redirect(CONFIG.freshservice_sso_trigger);
-  }
-});
-
-app.get('/', (req, res) => {
-  // Default landing — redirect to Freshservice to start SSO flow
-  res.redirect(CONFIG.freshservice_sso_trigger);
-});
-
-// ═══════════════════════════════════════════════════
-// LOGIN — Authenticate and redirect via OIDC implicit flow
-// ═══════════════════════════════════════════════════
+// ─────────────────────────────────────────
+// LOGIN — JWT Generation + Portal Restriction
+// ─────────────────────────────────────────
 app.post('/login', (req, res) => {
-  const { email, password, portal, state, nonce } = req.body;
-
-  console.log('📥 Login attempt:', { email, portal, hasState: !!state, hasNonce: !!nonce });
+  const { email, password, portal } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ success: false, error: 'Email and password are required.' });
   }
 
-  if (!state || !nonce) {
-    return res.status(400).json({
-      success: false,
-      error: 'SSO session expired. Please refresh the page and try again.'
-    });
-  }
-
   const agentKey = email.toLowerCase().trim();
   const agent = CONFIG.agents[agentKey];
 
+  // Agent does not exist
   if (!agent) {
     return res.status(401).json({ success: false, error: 'Invalid email or password.' });
   }
 
+  // Wrong password
   if (agent.password !== password) {
     return res.status(401).json({ success: false, error: 'Invalid email or password.' });
   }
 
+  // ✅ PORTAL RESTRICTION — Netflix agent cannot login via Amazon page
   if (portal && agent.workspace !== portal) {
     return res.status(403).json({
       success: false,
@@ -120,48 +72,43 @@ app.post('/login', (req, res) => {
     });
   }
 
-  // ─── Build JWT payload per Freshworks OIDC spec ───
+  // Build JWT
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    sub: agentKey,                    // Required — unique user ID
-    email: agentKey,                  // Required — must match agent email in Freshservice
-    given_name: agent.given_name,     // Required — first name
-    family_name: agent.family_name,   // Required — last name
-    iat: now,                         // Required — issued at (unix timestamp)
-    nonce: nonce                      // Required — MUST be the nonce Freshservice sent
+    sub: agentKey,
+    email: agentKey,
+    given_name: agent.given_name,
+    family_name: agent.family_name,
+    iat: now,
+    exp: now + 300,
+    jti: uuidv4()
   };
 
+  // Sign JWT
   let token;
   try {
-    token = jwt.sign(payload, PRIVATE_KEY, { algorithm: 'RS256', expiresIn: '5m' });
-    console.log('✅ JWT signed successfully');
+    token = jwt.sign(payload, PRIVATE_KEY, { algorithm: 'RS256' });
   } catch (err) {
-    console.error('❌ JWT signing error:', err.message);
-    return res.status(500).json({ success: false, error: 'Authentication error.' });
+    console.error('JWT signing error:', err.message);
+    return res.status(500).json({ success: false, error: 'Authentication error. Please contact admin.' });
   }
 
-  // ─── Redirect to Freshworks OIDC implicit endpoint ───
-  const redirectUrl = `${CONFIG.redirect_uri}?state=${encodeURIComponent(state)}&id_token=${token}`;
+  // ✅ Direct JWT login — goes straight to dashboard
+  const redirectUrl = `${CONFIG.freshservice_url}/login/jwt?jwt=${token}`;
 
-  console.log(`✅ Login: ${agentKey} → redirecting to OIDC endpoint`);
-
+  console.log(`✅ Login success: ${agentKey} → ${portal} portal`);
   return res.json({ success: true, redirectUrl });
 });
 
-// ═══════════════════════════════════════════════════
-// HEALTH CHECK
-// ═══════════════════════════════════════════════════
-app.get('/health', (req, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
+// Health check
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`
-✅ Freshservice JWT SSO Portal running on port ${PORT}
+✅ Freshservice SSO Portal running!
 🟠 Amazon → http://localhost:${PORT}/amazon
 🔴 Netflix → http://localhost:${PORT}/netflix
-📌 OIDC Redirect URI: ${CONFIG.redirect_uri}
-
-💡 Direct access to /amazon or /netflix will auto-redirect through
-   Freshservice to obtain OIDC params, then show the login page.
   `);
 });
