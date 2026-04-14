@@ -15,6 +15,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 const CONFIG = {
   freshservice_url: 'https://nive-959766391470843394.myfreshworks.com',
 
+  // OIDC Redirect URL from Freshservice → Admin → Security → SSO with JWT
+  redirect_uri: 'https://nive-959766391470843394.myfreshworks.com/sp/OIDC/964246980516603282/implicit',
+
   // Agents: email → { password, workspace, given_name, family_name }
   agents: {
     'niveditha@oskloud.com': { password: 'Nivedemo@1234', workspace: 'amazon', given_name: 'Niveditha', family_name: 'Agent' },
@@ -37,18 +40,48 @@ try {
 // ─────────────────────────────────────────
 // ROUTES
 // ─────────────────────────────────────────
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'amazon.html')));
-app.get('/amazon', (req, res) => res.sendFile(path.join(__dirname, 'public', 'amazon.html')));
-app.get('/netflix', (req, res) => res.sendFile(path.join(__dirname, 'public', 'netflix.html')));
+
+// Agent visits /amazon directly → no OIDC params → redirect to Freshservice
+// Freshservice sees SSO configured → bounces back to /amazon WITH state & nonce
+// Agent sees login page → enters credentials → lands in dashboard
+// The bounce is instant — agent just sees the login page appear.
+
+app.get('/', (req, res) => {
+  if (req.query.state && req.query.nonce) {
+    return res.sendFile(path.join(__dirname, 'public', 'amazon.html'));
+  }
+  res.redirect(CONFIG.freshservice_url);
+});
+
+app.get('/amazon', (req, res) => {
+  if (req.query.state && req.query.nonce) {
+    return res.sendFile(path.join(__dirname, 'public', 'amazon.html'));
+  }
+  // No OIDC params — redirect to Freshservice to get them
+  console.log('📌 /amazon direct access → bouncing through Freshservice for OIDC params');
+  res.redirect(CONFIG.freshservice_url);
+});
+
+app.get('/netflix', (req, res) => {
+  if (req.query.state && req.query.nonce) {
+    return res.sendFile(path.join(__dirname, 'public', 'netflix.html'));
+  }
+  console.log('📌 /netflix direct access → bouncing through Freshservice for OIDC params');
+  res.redirect(CONFIG.freshservice_url);
+});
 
 // ─────────────────────────────────────────
 // LOGIN — JWT Generation + Portal Restriction
 // ─────────────────────────────────────────
 app.post('/login', (req, res) => {
-  const { email, password, portal } = req.body;
+  const { email, password, portal, state, nonce } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ success: false, error: 'Email and password are required.' });
+  }
+
+  if (!state || !nonce) {
+    return res.status(400).json({ success: false, error: 'Session expired. Please refresh and try again.' });
   }
 
   const agentKey = email.toLowerCase().trim();
@@ -72,7 +105,7 @@ app.post('/login', (req, res) => {
     });
   }
 
-  // Build JWT
+  // Build JWT — per Freshworks OIDC spec
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     sub: agentKey,
@@ -81,7 +114,7 @@ app.post('/login', (req, res) => {
     family_name: agent.family_name,
     iat: now,
     exp: now + 300,
-    jti: uuidv4()
+    nonce: nonce       // MUST be the nonce Freshservice sent — not self-generated
   };
 
   // Sign JWT
@@ -93,8 +126,8 @@ app.post('/login', (req, res) => {
     return res.status(500).json({ success: false, error: 'Authentication error. Please contact admin.' });
   }
 
-  // ✅ Direct JWT login — goes straight to dashboard
-  const redirectUrl = `${CONFIG.freshservice_url}/login/jwt?jwt=${token}`;
+  // ✅ OIDC implicit flow — redirect to Freshworks with state + id_token
+  const redirectUrl = `${CONFIG.redirect_uri}?state=${encodeURIComponent(state)}&id_token=${token}`;
 
   console.log(`✅ Login success: ${agentKey} → ${portal} portal`);
   return res.json({ success: true, redirectUrl });
@@ -110,5 +143,6 @@ app.listen(PORT, () => {
 ✅ Freshservice SSO Portal running!
 🟠 Amazon → http://localhost:${PORT}/amazon
 🔴 Netflix → http://localhost:${PORT}/netflix
+📌 OIDC Redirect: ${CONFIG.redirect_uri}
   `);
 });
