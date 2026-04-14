@@ -136,15 +136,18 @@
       spinner.style.display = 'block';
       btnText.textContent = 'Verifying...';
       const body = new URLSearchParams(new FormData(e.target));
-      try {
-        const res = await fetch('/login', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body.toString() });
-        const data = await res.json();
-        if (data.success && data.redirectUrl) {
-          successMsg.classList.add('show');
-          btnText.textContent = 'Redirecting...';
-          setTimeout(() => { window.location.href = data.redirectUrl; }, 1000);
-        } else {
-          errorText.textContent = data.error || 'Invalid credentials.';
+      const urlParams = new URLSearchParams(window.location.search);
+      const state = urlParams.get('state') || '';
+      const nonce = urlParams.get('nonce') || '';
+      const loginUrl = `/login?state=${encodeURIComponent(state)}&nonce=${encodeURIComponent(nonce)}&portal=amazon`;
+     try {
+        const res = await fetch(loginUrl, { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: body.toString() });
+         const data = await res.json();
+         if (data.success && data.redirectUrl) {
+           successMsg.classList.add('show');
+           btnText.textContent = 'Redirecting...';
+           setTimeout(() => { window.location.href = data.redirectUrl; }, 1000);
+         } else {
           errorMsg.classList.add('show');
           btn.disabled = false;
           spinner.style.display = 'none';
