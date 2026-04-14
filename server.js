@@ -9,9 +9,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(__dirname));
 
-// ─────────────────────────────────────────
-// CONFIG
-// ─────────────────────────────────────────
 const CONFIG = {
   freshservice_redirect_url: 'https://nive-959766391470843394.myfreshworks.com/sp/OIDC/963808191442391342/implicit',
   agents: {
@@ -20,9 +17,7 @@ const CONFIG = {
   }
 };
 
-// ─────────────────────────────────────────
-// LOAD PRIVATE KEY (env variable OR file)
-// ─────────────────────────────────────────
+// Load Private Key
 let PRIVATE_KEY;
 try {
   if (process.env.PRIVATE_KEY_CONTENT) {
@@ -38,17 +33,41 @@ try {
 }
 
 // ─────────────────────────────────────────
-// ROUTES
+// ROUTES — pass state & nonce via form action
 // ─────────────────────────────────────────
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'amazon.html')));
-app.get('/amazon', (req, res) => res.sendFile(path.join(__dirname, 'amazon.html')));
-app.get('/netflix', (req, res) => res.sendFile(path.join(__dirname, 'netflix.html')));
+function serveWithParams(res, portal, state, nonce) {
+  let html = fs.readFileSync(path.join(__dirname, `${portal}.html`), 'utf8');
+  const qs = `?state=${encodeURIComponent(state || '')}&nonce=${encodeURIComponent(nonce || '')}&portal=${portal}`;
+  // Patch the form action to carry state+nonce as query params
+  html = html.replace(/action=["']\/login["']/gi, `action="/login${qs}"`);
+  res.send(html);
+}
+
+app.get('/', (req, res) => {
+  const { state, nonce } = req.query;
+  serveWithParams(res, 'amazon', state, nonce);
+});
+
+app.get('/amazon', (req, res) => {
+  const { state, nonce } = req.query;
+  serveWithParams(res, 'amazon', state, nonce);
+});
+
+app.get('/netflix', (req, res) => {
+  const { state, nonce } = req.query;
+  serveWithParams(res, 'netflix', state, nonce);
+});
 
 // ─────────────────────────────────────────
-// LOGIN — JWT Generation
+// LOGIN — state & nonce come from query params
 // ─────────────────────────────────────────
 app.post('/login', (req, res) => {
-  const { email, password, portal } = req.body;
+  // state + nonce from URL query (set by Freshservice originally)
+  const state  = req.query.state  || '';
+  const nonce  = req.query.nonce  || '';
+  const portal = req.query.portal || 'amazon';
+
+  const { email, password } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required.' });
@@ -65,7 +84,7 @@ app.post('/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
-  if (portal && agent.workspace !== portal) {
+  if (agent.workspace !== portal) {
     return res.status(403).json({
       error: `Access denied. You are not an agent for the ${portal} portal.`
     });
@@ -73,11 +92,11 @@ app.post('/login', (req, res) => {
 
   const now = Math.floor(Date.now() / 1000);
   const payload = {
-    sub: agentKey,
+    sub:   agentKey,
     email: agentKey,
-    iat: now,
-    exp: now + 300,
-    nonce: uuidv4()
+    iat:   now,
+    exp:   now + 300,
+    nonce: nonce || uuidv4()  // ← Freshservice's nonce goes INTO the JWT
   };
 
   let token;
@@ -85,25 +104,17 @@ app.post('/login', (req, res) => {
     token = jwt.sign(payload, PRIVATE_KEY, { algorithm: 'RS256' });
   } catch (err) {
     console.error('JWT signing error:', err.message);
-    return res.status(500).json({ error: 'Authentication error. Please contact admin.' });
+    return res.status(500).json({ error: 'Authentication error.' });
   }
 
-  const redirectUrl = `${CONFIG.freshservice_redirect_url}?id_token=${token}&state=${req.query.state || portal}&nonce=${payload.nonce}`;
+  // Redirect back with Freshservice's original state
+  const redirectUrl = `${CONFIG.freshservice_redirect_url}?id_token=${token}&state=${encodeURIComponent(state)}&nonce=${encodeURIComponent(payload.nonce)}`;
   return res.json({ success: true, redirectUrl });
 });
 
-// ─────────────────────────────────────────
-// HEALTH CHECK
-// ─────────────────────────────────────────
-app.get('/health', (req, res) => res.json({ status: 'ok', message: '✅ Freshservice SSO is running' }));
+app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// ─────────────────────────────────────────
-// START SERVER
-// ─────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Freshservice SSO Portal running!`);
-  console.log(`🟠 Amazon  → http://localhost:${PORT}/amazon`);
-  console.log(`🔴 Netflix → http://localhost:${PORT}/netflix`);
-  console.log(`💚 Health  → http://localhost:${PORT}/health`);
+  console.log(`✅ SSO Portal running on port ${PORT}`);
 });
