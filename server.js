@@ -22,11 +22,16 @@ const CONFIG = {
   }
 };
 
-// Load RSA private key from file
+// Load RSA private key from env variable or file
 let PRIVATE_KEY;
 try {
-  PRIVATE_KEY = fs.readFileSync(path.join(__dirname, 'private.key'), 'utf8');
-  console.log('✅ Private key loaded successfully');
+  if (process.env.PRIVATE_KEY_CONTENT) {
+    PRIVATE_KEY = process.env.PRIVATE_KEY_CONTENT.replace(/\\n/g, '\n');
+    console.log('✅ Private key loaded from environment variable');
+  } else {
+    PRIVATE_KEY = fs.readFileSync(path.join(__dirname, 'private.key'), 'utf8');
+    console.log('✅ Private key loaded from file');
+  }
 } catch (err) {
   console.error('❌ private.key not found! Make sure private.key is in the same folder as server.js');
   process.exit(1);
